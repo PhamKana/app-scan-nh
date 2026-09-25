@@ -19,7 +19,7 @@ import { exportPages } from "@/lib/export";
 import type { ColorMode, Page, Quad } from "@/lib/types";
 export default function Home() {
   const [mode, setMode] = useState<"quick" | "normal">("quick"),
-    [colorMode, setColorMode] = useState<ColorMode>("original"),
+    [colorMode, setColorMode] = useState<ColorMode>("paper"),
     [pages, setPages] = useState<Page[]>([]),
     [busy, setBusy] = useState(false),
     [exporting, setExporting] = useState<"pdf" | "jpg" | null>(null),
@@ -29,6 +29,8 @@ export default function Home() {
   const latest = useRef(pages);
   latest.current = pages;
   const running = useRef(false);
+  const scanQueue = useRef(Promise.resolve());
+  const scanJobs = useRef(new Map<string, symbol>());
   const urls = useRef(new Set<string>());
   const url = (blob: Blob) => {
     const u = URL.createObjectURL(blob);
@@ -43,7 +45,9 @@ export default function Home() {
   };
   useEffect(() => {
     const owned = urls.current;
+    const jobs = scanJobs.current;
     return () => {
+      jobs.clear();
       owned.forEach((u) => URL.revokeObjectURL(u));
       resetWorker();
     };
@@ -140,33 +144,65 @@ export default function Home() {
   }
   const current = pages.find((p) => p.id === editing && p.status !== "error");
   const locked = busy || !!exporting || !!current;
-  async function confirm(corners: Quad, rotation: number) {
-    if (!current) return;
-    const r = await processImage(
-      current.source,
-      "scan",
-      rotation,
-      corners,
-      colorMode,
-    );
-    revoke(current.resultUrl);
-    update(current.id, {
+  function queueScan(page: Page, corners: Quad, rotation: number) {
+    const job = Symbol();
+    scanJobs.current.set(page.id, job);
+    update(page.id, {
       corners,
       rotation,
       detected: true,
-      result: r.blob,
-      resultUrl: url(r.blob!),
-      status: "done",
+      confirmed: true,
+      status: "processing",
       notice: undefined,
+      error: undefined,
     });
+    // Start each timeout only when this page reaches the front of the queue.
+    scanQueue.current = scanQueue.current.then(async () => {
+      if (scanJobs.current.get(page.id) !== job) return;
+      try {
+        const r = await processImage(
+          page.source,
+          "scan",
+          rotation,
+          corners,
+          colorMode,
+        );
+        if (scanJobs.current.get(page.id) !== job) return;
+        revoke(page.resultUrl);
+        update(page.id, {
+          result: r.blob,
+          resultUrl: url(r.blob!),
+          status: "done",
+        });
+      } catch (e) {
+        if (scanJobs.current.get(page.id) === job)
+          update(page.id, { status: "error", error: (e as Error).message });
+      } finally {
+        if (scanJobs.current.get(page.id) === job)
+          scanJobs.current.delete(page.id);
+      }
+    });
+  }
+  function confirm(corners: Quad, rotation: number) {
+    if (!current || scanJobs.current.has(current.id)) return;
+    queueScan(current, corners, rotation);
     setEditing(
       pages.find((p) => p.id !== current.id && p.status === "pending")?.id ||
         null,
     );
   }
   const completed = pages.filter((p) => p.status === "done").length;
+  const processing = pages.filter(
+    (p) => p.status === "processing" || p.status === "queued",
+  ).length;
   async function changeColor(next: ColorMode) {
-    if (locked || running.current || next === colorMode) return;
+    if (
+      locked ||
+      running.current ||
+      scanJobs.current.size ||
+      next === colorMode
+    )
+      return;
     running.current = true;
     setBusy(true);
     setError("");
@@ -295,7 +331,7 @@ export default function Home() {
                   key={value}
                   className="color-option"
                   aria-pressed={colorMode === value}
-                  disabled={locked}
+                  disabled={locked || processing > 0}
                   onClick={() => changeColor(value)}
                 >
                   {value === "original" ? "Màu gốc" : "Scan giấy"}
@@ -328,10 +364,10 @@ export default function Home() {
               <h2>Tài liệu đã scan</h2>
               <span className="count">{pages.length}</span>
             </div>
-            {busy ? (
+            {busy || processing > 0 ? (
               <span className="progress" role="status">
                 <LoaderCircle size={16} className="spin" />
-                {progress}
+                {progress || `Đang xử lý nền ${processing} trang`}
               </span>
             ) : (
               <span className="subtle">
@@ -359,6 +395,7 @@ export default function Home() {
               locked={locked}
               onEdit={setEditing}
               onRemove={(id) => {
+                scanJobs.current.delete(id);
                 const p = pages.find((p) => p.id === id)!;
                 revoke(p.preview);
                 revoke(p.resultUrl);
@@ -374,14 +411,18 @@ export default function Home() {
               }
               onRetry={async (id) => {
                 if (running.current) return;
+                const p = pages.find((p) => p.id === id)!;
+                if (p.confirmed && p.corners) {
+                  queueScan(p, p.corners, p.rotation);
+                  return;
+                }
                 running.current = true;
                 setBusy(true);
-                resetWorker();
-                const p = pages.find((p) => p.id === id)!;
-                await scan(p);
+                if (!scanJobs.current.size) resetWorker();
+                const success = await scan(p);
                 setBusy(false);
                 running.current = false;
-                if (p.mode === "normal") setEditing(id);
+                if (success && p.mode === "normal") setEditing(id);
               }}
             />
           ) : (

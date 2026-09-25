@@ -238,12 +238,15 @@ async function run({
           b = data[i + 2];
         const light = Math.max(40, background.data[p]);
         const ratio = gray.data[p] / light;
-        const tone = Math.max(0, Math.min(1, (ratio - 0.38) / 0.55));
+        // Lift faint paper patterns into white while retaining dark text and
+        // antialiased stroke edges; avoid a hard black/white threshold.
+        const tone = Math.max(0, Math.min(1, (ratio - 0.3) / 0.5));
         const neutral = Math.round(255 * tone * tone * (3 - 2 * tone));
         // Keep red/pink stamp ink and blue/navy pen ink, including soft edges.
         const red = Math.min(r - g, r - b);
         const blue = Math.min(b - r, (b - g) * 1.5);
-        const ink = Math.max(0, Math.min(1, (Math.max(red, blue) - 10) / 30));
+        const dominance = Math.max(red, blue) / Math.max(40, r, g, b);
+        const ink = Math.max(0, Math.min(1, (dominance - 0.06) / 0.14));
         const gain = Math.min(1.8, 255 / light);
         data[i] = neutral * (1 - ink) + Math.min(255, r * gain) * ink;
         data[i + 1] = neutral * (1 - ink) + Math.min(255, g * gain) * ink;

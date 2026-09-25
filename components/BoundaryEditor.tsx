@@ -20,7 +20,7 @@ export default function BoundaryEditor({
   page: Page;
   colorMode: ColorMode;
   onCancel: () => void;
-  onConfirm: (corners: Quad, rotation: number) => Promise<void>;
+  onConfirm: (corners: Quad, rotation: number) => void;
 }) {
   const [rotation, setRotation] = useState(page.rotation),
     [corners, setCorners] = useState<Quad>(
@@ -106,7 +106,10 @@ export default function BoundaryEditor({
           <div>
             <span className="eyebrow">CHỈNH TÀI LIỆU</span>
             <h2 id="editor-title">Chỉnh vùng scan</h2>
-            <p>Kéo từng góc đến mép tài liệu của bạn.</p>
+            <p>
+              Kéo 4 góc theo mép giấy. Bấm Xác nhận để cắt và làm phẳng vùng đã
+              căn thành trang chữ nhật.
+            </p>
           </div>
           <button
             className="icon-btn"
@@ -251,16 +254,7 @@ export default function BoundaryEditor({
           <button
             className="primary"
             disabled={busy}
-            onClick={async () => {
-              setBusy(true);
-              setError("");
-              try {
-                await onConfirm(corners, rotation);
-              } catch (e) {
-                setError((e as Error).message);
-                setBusy(false);
-              }
-            }}
+            onClick={() => onConfirm(corners, rotation)}
           >
             {busy ? (
               <LoaderCircle className="spin" size={18} />

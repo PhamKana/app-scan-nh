@@ -421,6 +421,13 @@ test("paper filter whitens shaded paper, keeps black text, red stamps and blue i
     gradient.addColorStop(1, "#eee8cc");
     ctx.fillStyle = gradient;
     ctx.fillRect(0, 0, 600, 400);
+    // Faint gray pattern plus desaturated ink, like a photographed certificate.
+    ctx.fillStyle = "#a5a5a5";
+    ctx.fillRect(500, 100, 8, 60);
+    ctx.fillStyle = "#87706f";
+    ctx.fillRect(100, 100, 8, 60);
+    ctx.fillStyle = "#6f788c";
+    ctx.fillRect(210, 100, 8, 60);
     for (const [i, color] of [
       "#202020",
       "#be243a",
@@ -462,6 +469,9 @@ test("paper filter whitens shaded paper, keeps black text, red stamps and blue i
         [213, 200],
         [323, 200],
         [433, 200],
+        [503, 120],
+        [103, 120],
+        [213, 120],
       ].map(([x, y]) =>
         Array.from(oc.getImageData(x, y, 1, 1).data).slice(0, 3),
       );
@@ -475,6 +485,9 @@ test("paper filter whitens shaded paper, keeps black text, red stamps and blue i
   expect(samples[3][0] - samples[3][1]).toBeGreaterThan(80);
   expect(samples[4][2] - samples[4][0]).toBeGreaterThan(70);
   expect(Math.max(...samples[5]) - Math.min(...samples[5])).toBeLessThan(12);
+  expect(Math.min(...samples[6])).toBeGreaterThan(240);
+  expect(samples[7][0] - samples[7][1]).toBeGreaterThan(20);
+  expect(samples[8][2] - samples[8][0]).toBeGreaterThan(30);
 });
 
 for (const mode of ["quick", "normal"] as const) {
@@ -483,6 +496,7 @@ for (const mode of ["quick", "normal"] as const) {
       page,
     }, testInfo) => {
       await page.goto("/");
+      await page.getByRole("button", { name: "Màu gốc", exact: true }).click();
       if (mode === "normal")
         await page.getByRole("button", { name: /Scan bình thường/ }).click();
       const img = await fixture(page, blank);
@@ -536,4 +550,232 @@ for (const mode of ["quick", "normal"] as const) {
       expect(await bytes()).toEqual(original);
     });
   }
+}
+
+test("four selected corners flatten perspective: grid lines become horizontal and vertical in both colors", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const results = await page.evaluate(async () => {
+    const c = new OffscreenCanvas(800, 600),
+      ctx = c.getContext("2d")!;
+    ctx.fillStyle = "#34504a";
+    ctx.fillRect(0, 0, 800, 600);
+    // A known perspective projection: horizontal and vertical lines both lean.
+    const project = (u: number, v: number) => ({
+      x: (550 * u + 60 * v + 100) / (0.25 * v + 1),
+      y: (70 * u + 490 * v + 60) / (0.25 * v + 1),
+    });
+    const corners = [
+      project(0, 0),
+      project(1, 0),
+      project(1, 1),
+      project(0, 1),
+    ];
+    ctx.beginPath();
+    corners.forEach((p, i) =>
+      i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y),
+    );
+    ctx.closePath();
+    ctx.fillStyle = "#e2ddc7";
+    ctx.fill();
+    ctx.strokeStyle = "#151515";
+    ctx.lineWidth = 3;
+    for (const t of [0.25, 0.5, 0.75]) {
+      for (const [a, b] of [
+        [project(0.05, t), project(0.95, t)],
+        [project(t, 0.05), project(t, 0.95)],
+      ]) {
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+        ctx.stroke();
+      }
+    }
+    const blob = await c.convertToBlob();
+    const worker = new Worker("/scanner.worker.js");
+    const results = [];
+    try {
+      let id = 0;
+      for (const colorMode of ["original", "paper"]) {
+        for (const rotation of [0, 90]) {
+          const selected =
+            rotation === 0
+              ? corners
+              : [corners[3], corners[0], corners[1], corners[2]].map((p) => ({
+                  x: 599 - p.y,
+                  y: p.x,
+                }));
+          const result = await new Promise<any>((resolve, reject) => {
+            worker.onmessage = ({ data }) =>
+              data.error ? reject(Error(data.error)) : resolve(data);
+            worker.postMessage({
+              id: ++id,
+              blob,
+              action: "scan",
+              rotation,
+              corners: selected,
+              colorMode,
+            });
+          });
+          const bitmap = await createImageBitmap(result.blob);
+          const out = new OffscreenCanvas(bitmap.width, bitmap.height),
+            oc = out.getContext("2d")!;
+          oc.drawImage(bitmap, 0, 0);
+          bitmap.close();
+          const pixels = oc.getImageData(0, 0, out.width, out.height).data;
+          const brightness = (x: number, y: number) =>
+            pixels[(y * out.width + x) * 4];
+          const offsets: number[] = [];
+          for (const t of [0.25, 0.5, 0.75]) {
+            for (const sample of [0.12, 0.38, 0.62, 0.88]) {
+              for (const horizontal of [true, false]) {
+                const fixed = Math.round(
+                  sample * ((horizontal ? out.width : out.height) - 1),
+                );
+                const expected = Math.round(
+                  t * ((horizontal ? out.height : out.width) - 1),
+                );
+                let best = 255,
+                  at = -100;
+                for (let delta = -4; delta <= 4; delta++) {
+                  const value = horizontal
+                    ? brightness(fixed, expected + delta)
+                    : brightness(expected + delta, fixed);
+                  if (value < best) {
+                    best = value;
+                    at = delta;
+                  }
+                }
+                if (best > 60)
+                  throw Error(
+                    `Missing straight line: ${colorMode}, rotation ${rotation}`,
+                  );
+                offsets.push(at);
+              }
+            }
+          }
+          results.push({
+            colorMode,
+            rotation,
+            offsets,
+            corners: result.corners,
+            selected,
+          });
+        }
+      }
+    } finally {
+      worker.terminate();
+    }
+    return results;
+  });
+  expect(results).toHaveLength(4);
+  for (const result of results) {
+    expect(result.corners).toEqual(result.selected);
+    for (const offset of result.offsets)
+      expect(Math.abs(offset)).toBeLessThanOrEqual(2);
+  }
+});
+
+for (const outcome of ["success", "retry", "remove"] as const) {
+  test(`confirmation advances immediately while processing in background: ${outcome}`, async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      const NativeWorker = window.Worker;
+      const state = window as any;
+      state.heldScans = [];
+      state.scanInputs = [];
+      window.Worker = class extends NativeWorker {
+        postMessage(data: any) {
+          if (data.action !== "scan") {
+            super.postMessage(data);
+            return;
+          }
+          state.scanInputs.push({
+            corners: data.corners,
+            rotation: data.rotation,
+            colorMode: data.colorMode,
+          });
+          state.heldScans.push((fail: boolean) => {
+            if (fail)
+              this.dispatchEvent(
+                new MessageEvent("message", {
+                  data: { id: data.id, error: "Lỗi xử lý thử nghiệm" },
+                }),
+              );
+            else super.postMessage(data);
+          });
+        }
+      };
+    });
+    await page.goto("/");
+    await expect(
+      page.getByRole("button", { name: "Scan giấy", exact: true }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await page.getByRole("button", { name: /Scan bình thường/ }).click();
+    const img = await fixture(page);
+    await page
+      .locator("input[type=file]")
+      .setInputFiles(
+        [1, 2].map((i) => ({
+          name: `page-${i}.png`,
+          mimeType: "image/png",
+          buffer: Buffer.from(img, "base64"),
+        })),
+      );
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await page.getByRole("button", { name: "Xoay 90°" }).click();
+    await page.getByRole("button", { name: "Xác nhận", exact: true }).click();
+    // No worker reply has been released: the next editor must already work.
+    await expect(page.locator(".status.processing")).toHaveCount(1);
+    await expect(
+      page.getByRole("button", { name: "Xác nhận", exact: true }),
+    ).toBeEnabled();
+    await page.getByRole("button", { name: "Xác nhận", exact: true }).click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(page.locator(".status.processing")).toHaveCount(2);
+    await expect(page.getByRole("button", { name: "Tải PDF" })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Tải JPG" })).toBeDisabled();
+    await expect(
+      page.getByRole("button", { name: "Màu gốc", exact: true }),
+    ).toBeDisabled();
+    if (outcome === "remove")
+      await page.getByRole("button", { name: "Xóa trang 2" }).click();
+    await expect
+      .poll(() => page.evaluate(() => (window as any).heldScans.length))
+      .toBe(1);
+    await page.evaluate(
+      (fail) => (window as any).heldScans.shift()(fail),
+      outcome === "retry",
+    );
+    if (outcome !== "remove") {
+      await expect
+        .poll(() => page.evaluate(() => (window as any).heldScans.length))
+        .toBe(1);
+      await page.evaluate(() => (window as any).heldScans.shift()(false));
+    }
+    if (outcome === "retry") {
+      await expect(page.locator(".status.error")).toHaveCount(1);
+      await page.getByRole("button", { name: "Thử lại", exact: true }).click();
+      await expect(page.getByRole("dialog")).toHaveCount(0);
+      await expect
+        .poll(() => page.evaluate(() => (window as any).heldScans.length))
+        .toBe(1);
+      const inputs = await page.evaluate(() => (window as any).scanInputs);
+      expect(inputs[2]).toEqual(inputs[0]);
+      expect(inputs[2].rotation).toBe(90);
+      expect(inputs[2].colorMode).toBe("paper");
+      await page.evaluate(() => (window as any).heldScans.shift()(false));
+    }
+    await expect(page.locator(".status.done")).toHaveCount(
+      outcome === "remove" ? 1 : 2,
+    );
+    await expect(page.getByRole("button", { name: "Tải PDF" })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "Tải JPG" })).toBeEnabled();
+    if (outcome === "remove")
+      expect(await page.evaluate(() => (window as any).scanInputs.length)).toBe(
+        1,
+      );
+  });
 }

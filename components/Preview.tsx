@@ -113,7 +113,12 @@ export default function Preview({
               {p.error && <p className="error-text">{p.error}</p>}
               <div className="card-actions">
                 <button
-                  disabled={locked || p.status === "error"}
+                  disabled={
+                    locked ||
+                    p.status === "error" ||
+                    p.status === "processing" ||
+                    p.status === "queued"
+                  }
                   onClick={() => onEdit(p.id)}
                 >
                   <ScanLine size={15} />

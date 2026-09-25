@@ -10,6 +10,7 @@ export type Page = {
   height: number;
   corners?: Quad;
   detected?: boolean;
+  confirmed?: boolean;
   rotation: number;
   status: "queued" | "processing" | "pending" | "done" | "error";
   mode: "quick" | "normal";
