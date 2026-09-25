@@ -8,15 +8,17 @@ import {
   X,
   LoaderCircle,
 } from "lucide-react";
-import type { Page, Quad } from "@/lib/types";
+import type { ColorMode, Page, Quad } from "@/lib/types";
 import { fullQuad, rotateQuad, validQuad } from "@/lib/geometry";
 import { processImage } from "@/lib/processing";
 export default function BoundaryEditor({
   page,
+  colorMode,
   onCancel,
   onConfirm,
 }: {
   page: Page;
+  colorMode: ColorMode;
   onCancel: () => void;
   onConfirm: (corners: Quad, rotation: number) => Promise<void>;
 }) {
@@ -238,7 +240,11 @@ export default function BoundaryEditor({
           </p>
         )}
         <div className="editor-footer">
-          <span>Giữ nguyên màu sắc gốc</span>
+          <span>
+            {colorMode === "paper"
+              ? "Scan giấy · giữ dấu đỏ, bút xanh"
+              : "Giữ nguyên màu sắc gốc"}
+          </span>
           <button disabled={busy} onClick={onCancel}>
             Hủy
           </button>

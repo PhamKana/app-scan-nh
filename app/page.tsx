@@ -16,9 +16,10 @@ import Preview from "@/components/Preview";
 import BoundaryEditor from "@/components/BoundaryEditor";
 import { decodeFile, processImage, resetWorker } from "@/lib/processing";
 import { exportPages } from "@/lib/export";
-import type { Page, Quad } from "@/lib/types";
+import type { ColorMode, Page, Quad } from "@/lib/types";
 export default function Home() {
   const [mode, setMode] = useState<"quick" | "normal">("quick"),
+    [colorMode, setColorMode] = useState<ColorMode>("original"),
     [pages, setPages] = useState<Page[]>([]),
     [busy, setBusy] = useState(false),
     [exporting, setExporting] = useState<"pdf" | "jpg" | null>(null),
@@ -71,9 +72,13 @@ export default function Home() {
       const r = await processImage(
         page.source,
         page.mode === "quick" ? "scan" : "detect",
+        0,
+        undefined,
+        colorMode,
       );
       update(page.id, {
         corners: r.corners,
+        detected: r.detected,
         status: page.mode === "quick" ? "done" : "pending",
         result: r.blob,
         resultUrl: r.blob ? url(r.blob) : undefined,
@@ -137,11 +142,18 @@ export default function Home() {
   const locked = busy || !!exporting || !!current;
   async function confirm(corners: Quad, rotation: number) {
     if (!current) return;
-    const r = await processImage(current.source, "scan", rotation, corners);
+    const r = await processImage(
+      current.source,
+      "scan",
+      rotation,
+      corners,
+      colorMode,
+    );
     revoke(current.resultUrl);
     update(current.id, {
       corners,
       rotation,
+      detected: true,
       result: r.blob,
       resultUrl: url(r.blob!),
       status: "done",
@@ -153,6 +165,41 @@ export default function Home() {
     );
   }
   const completed = pages.filter((p) => p.status === "done").length;
+  async function changeColor(next: ColorMode) {
+    if (locked || running.current || next === colorMode) return;
+    running.current = true;
+    setBusy(true);
+    setError("");
+    try {
+      const results = new Map<string, Blob>();
+      for (const [i, page] of pages.entries()) {
+        if (page.status !== "done") continue;
+        setProgress(`Đang đổi màu ${i + 1}/${pages.length} ảnh`);
+        const result = await processImage(
+          page.source,
+          "scan",
+          page.rotation,
+          page.detected === false ? undefined : page.corners,
+          next,
+        );
+        results.set(page.id, result.blob!);
+      }
+      const updated = pages.map((page) => {
+        const result = results.get(page.id);
+        if (!result) return page;
+        revoke(page.resultUrl);
+        return { ...page, result, resultUrl: url(result) };
+      });
+      setPages(updated);
+      setColorMode(next);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      running.current = false;
+      setBusy(false);
+      setProgress("");
+    }
+  }
   return (
     <>
       <header>
@@ -179,14 +226,14 @@ export default function Home() {
             Thành <span>tài liệu chỉn chu.</span>
           </h1>
           <p>
-            Cắt đúng viền, chỉnh thẳng trang, giữ trọn màu sắc.
+            Cắt đúng viền, chỉnh thẳng trang, chọn màu theo ý bạn.
             <br />
             Scan tài liệu ngay trong trình duyệt — đơn giản và riêng tư.
           </p>
           <div className="benefits">
             <span>
               <Check />
-              Giữ màu gốc
+              Màu gốc hoặc scan giấy
             </span>
             <span>
               <Check />
@@ -239,6 +286,26 @@ export default function Home() {
               </span>
               <span className="radio">{mode === "normal" && <span />}</span>
             </button>
+          </div>
+          <div className="color-options" role="group" aria-label="Màu tài liệu">
+            <span>Màu tài liệu</span>
+            <div className="export-actions">
+              {(["original", "paper"] as const).map((value) => (
+                <button
+                  key={value}
+                  className="color-option"
+                  aria-pressed={colorMode === value}
+                  disabled={locked}
+                  onClick={() => changeColor(value)}
+                >
+                  {value === "original" ? "Màu gốc" : "Scan giấy"}
+                </button>
+              ))}
+            </div>
+            <p>
+              Scan giấy: nền trắng, chữ rõ, giữ màu dấu đỏ và bút ký xanh biển.
+              Áp dụng cho tất cả các trang và file tải xuống.
+            </p>
           </div>
           <Upload onFiles={addFiles} disabled={locked} onError={setError} />
           <div className="local-note">
@@ -396,6 +463,7 @@ export default function Home() {
         <BoundaryEditor
           key={current.id}
           page={current}
+          colorMode={colorMode}
           onCancel={() => setEditing(null)}
           onConfirm={confirm}
         />

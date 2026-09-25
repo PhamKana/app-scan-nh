@@ -408,3 +408,132 @@ for (const mode of ["quick", "normal"] as const) {
     });
   }
 }
+
+test("paper filter whitens shaded paper, keeps black text, red stamps and blue ink", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const samples = await page.evaluate(async () => {
+    const c = new OffscreenCanvas(600, 400),
+      ctx = c.getContext("2d")!;
+    const gradient = ctx.createLinearGradient(0, 0, 600, 0);
+    gradient.addColorStop(0, "#aaa58d");
+    gradient.addColorStop(1, "#eee8cc");
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, 600, 400);
+    for (const [i, color] of [
+      "#202020",
+      "#be243a",
+      "#244ca9",
+      "#37924b",
+    ].entries()) {
+      ctx.fillStyle = color;
+      ctx.fillRect(100 + i * 110, 180, 8, 60);
+    }
+    const blob = await c.convertToBlob();
+    const worker = new Worker("/scanner.worker.js");
+    try {
+      const result = await new Promise<any>((resolve, reject) => {
+        worker.onmessage = ({ data }) =>
+          data.error ? reject(Error(data.error)) : resolve(data);
+        worker.postMessage({
+          id: 1,
+          blob,
+          action: "scan",
+          rotation: 0,
+          colorMode: "paper",
+          corners: [
+            { x: 0, y: 0 },
+            { x: 599, y: 0 },
+            { x: 599, y: 399 },
+            { x: 0, y: 399 },
+          ],
+        });
+      });
+      const bitmap = await createImageBitmap(result.blob);
+      const out = new OffscreenCanvas(bitmap.width, bitmap.height),
+        oc = out.getContext("2d")!;
+      oc.drawImage(bitmap, 0, 0);
+      bitmap.close();
+      return [
+        [30, 30],
+        [550, 30],
+        [103, 200],
+        [213, 200],
+        [323, 200],
+        [433, 200],
+      ].map(([x, y]) =>
+        Array.from(oc.getImageData(x, y, 1, 1).data).slice(0, 3),
+      );
+    } finally {
+      worker.terminate();
+    }
+  });
+  for (const paper of samples.slice(0, 2))
+    expect(Math.min(...paper)).toBeGreaterThan(245);
+  expect(Math.max(...samples[2])).toBeLessThan(40);
+  expect(samples[3][0] - samples[3][1]).toBeGreaterThan(80);
+  expect(samples[4][2] - samples[4][0]).toBeGreaterThan(70);
+  expect(Math.max(...samples[5]) - Math.min(...samples[5])).toBeLessThan(12);
+});
+
+for (const mode of ["quick", "normal"] as const) {
+  for (const blank of [false, true]) {
+    test(`${mode}: change color after scan and restore original (blank=${blank})`, async ({
+      page,
+    }, testInfo) => {
+      await page.goto("/");
+      if (mode === "normal")
+        await page.getByRole("button", { name: /Scan bình thường/ }).click();
+      const img = await fixture(page, blank);
+      await page.locator("input[type=file]").setInputFiles({
+        name: "color.png",
+        mimeType: "image/png",
+        buffer: Buffer.from(img, "base64"),
+      });
+      if (mode === "normal")
+        await page
+          .getByRole("button", { name: "Xác nhận", exact: true })
+          .click();
+      await expect(page.locator(".status.done")).toHaveCount(1);
+      const bytes = () =>
+        page
+          .locator(".thumbnail img")
+          .evaluate(async (image) =>
+            Array.from(
+              new Uint8Array(
+                await (
+                  await fetch((image as HTMLImageElement).src)
+                ).arrayBuffer(),
+              ),
+            ),
+          );
+      const original = await bytes();
+      await page
+        .getByRole("button", { name: "Scan giấy", exact: true })
+        .click();
+      await expect(
+        page.getByRole("button", { name: "Scan giấy", exact: true }),
+      ).toHaveAttribute("aria-pressed", "true");
+      const paper = Buffer.from(await bytes());
+      expect(Array.from(paper)).not.toEqual(original);
+      await expect(page.getByRole("button", { name: "Tải PDF" })).toBeEnabled();
+      await expect(page.getByRole("button", { name: "Tải JPG" })).toBeEnabled();
+      for (const format of ["JPG", "PDF"]) {
+        const downloadPromise = page.waitForEvent("download");
+        await page.getByRole("button", { name: `Tải ${format}` }).click();
+        const download = await downloadPromise;
+        const path = testInfo.outputPath(`paper.${format.toLowerCase()}`);
+        await download.saveAs(path);
+        const content = readFileSync(path);
+        if (format === "JPG") expect(content.equals(paper)).toBe(true);
+        else expect(content.indexOf(paper)).toBeGreaterThan(0);
+      }
+      await page.getByRole("button", { name: "Màu gốc", exact: true }).click();
+      await expect(
+        page.getByRole("button", { name: "Màu gốc", exact: true }),
+      ).toHaveAttribute("aria-pressed", "true");
+      expect(await bytes()).toEqual(original);
+    });
+  }
+}

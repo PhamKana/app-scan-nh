@@ -1,4 +1,4 @@
-import type { Quad } from "./types";
+import type { ColorMode, Quad } from "./types";
 let worker: Worker | undefined;
 let serial = 0;
 const pending = new Map<
@@ -30,6 +30,7 @@ export function processImage(
   action: "detect" | "scan",
   rotation = 0,
   corners?: Quad,
+  colorMode: ColorMode = "original",
 ): Promise<Result> {
   if (!worker) {
     worker = new Worker("/scanner.worker.js");
@@ -46,7 +47,7 @@ export function processImage(
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => resetWorker(), 90000);
     pending.set(id, { resolve, reject, timer });
-    worker!.postMessage({ id, blob, action, rotation, corners });
+    worker!.postMessage({ id, blob, action, rotation, corners, colorMode });
   });
 }
 export async function decodeFile(file: File) {

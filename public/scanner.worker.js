@@ -49,7 +49,14 @@ function ordered(points) {
       first = i;
   return [...points.slice(first), ...points.slice(0, first)];
 }
-async function run({ id, blob, action, rotation, corners }) {
+async function run({
+  id,
+  blob,
+  action,
+  rotation,
+  corners,
+  colorMode = "original",
+}) {
   const { fullQuad, validQuad } = await import("/geometry.mjs");
   const { cv } = await getCV();
   const bitmap = await createImageBitmap(blob);
@@ -206,6 +213,43 @@ async function run({ id, blob, action, rotation, corners }) {
           0,
           0,
         );
+    }
+    if (colorMode === "paper") {
+      const oc = output.getContext("2d");
+      const pixels = oc.getImageData(0, 0, output.width, output.height);
+      const src = keep(cv.matFromImageData(pixels));
+      const gray = keep(new cv.Mat());
+      const background = keep(new cv.Mat());
+      const size = Math.max(
+        15,
+        Math.round(Math.min(output.width, output.height) / 35) | 1,
+      );
+      const kernel = keep(
+        cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(size, size)),
+      );
+      cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+      // Close small dark strokes to estimate the paper illumination locally.
+      cv.morphologyEx(gray, background, cv.MORPH_CLOSE, kernel);
+      cv.GaussianBlur(background, background, new cv.Size(size, size), 0);
+      const data = pixels.data;
+      for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+        const r = data[i],
+          g = data[i + 1],
+          b = data[i + 2];
+        const light = Math.max(40, background.data[p]);
+        const ratio = gray.data[p] / light;
+        const tone = Math.max(0, Math.min(1, (ratio - 0.38) / 0.55));
+        const neutral = Math.round(255 * tone * tone * (3 - 2 * tone));
+        // Keep red/pink stamp ink and blue/navy pen ink, including soft edges.
+        const red = Math.min(r - g, r - b);
+        const blue = Math.min(b - r, (b - g) * 1.5);
+        const ink = Math.max(0, Math.min(1, (Math.max(red, blue) - 10) / 30));
+        const gain = Math.min(1.8, 255 / light);
+        data[i] = neutral * (1 - ink) + Math.min(255, r * gain) * ink;
+        data[i + 1] = neutral * (1 - ink) + Math.min(255, g * gain) * ink;
+        data[i + 2] = neutral * (1 - ink) + Math.min(255, b * gain) * ink;
+      }
+      oc.putImageData(pixels, 0, 0);
     }
     const result = await output.convertToBlob({
       type: "image/jpeg",

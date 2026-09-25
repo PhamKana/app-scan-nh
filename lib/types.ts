@@ -1,4 +1,5 @@
 export type Point = { x: number; y: number };
+export type ColorMode = "original" | "paper";
 export type Quad = [Point, Point, Point, Point];
 export type Page = {
   id: string;
@@ -8,6 +9,7 @@ export type Page = {
   width: number;
   height: number;
   corners?: Quad;
+  detected?: boolean;
   rotation: number;
   status: "queued" | "processing" | "pending" | "done" | "error";
   mode: "quick" | "normal";
