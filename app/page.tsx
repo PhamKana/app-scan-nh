@@ -21,7 +21,7 @@ export default function Home() {
   const [mode, setMode] = useState<"quick" | "normal">("quick"),
     [pages, setPages] = useState<Page[]>([]),
     [busy, setBusy] = useState(false),
-    [exporting, setExporting] = useState(false),
+    [exporting, setExporting] = useState<"pdf" | "jpg" | null>(null),
     [progress, setProgress] = useState(""),
     [error, setError] = useState(""),
     [editing, setEditing] = useState<string | null>(null);
@@ -134,7 +134,7 @@ export default function Home() {
     }
   }
   const current = pages.find((p) => p.id === editing && p.status !== "error");
-  const locked = busy || exporting || !!current;
+  const locked = busy || !!exporting || !!current;
   async function confirm(corners: Quad, rotation: number) {
     if (!current) return;
     const r = await processImage(current.source, "scan", rotation, corners);
@@ -341,27 +341,34 @@ export default function Home() {
                     : "Sắp xếp trang theo ý bạn, rồi tải xuống."}
               </p>
             </div>
-            <button
-              className="primary"
-              disabled={locked || !pages.length || completed !== pages.length}
-              onClick={async () => {
-                setExporting(true);
-                try {
-                  await exportPages(pages);
-                } catch (e) {
-                  setError((e as Error).message);
-                } finally {
-                  setExporting(false);
-                }
-              }}
-            >
-              {exporting ? (
-                <LoaderCircle className="spin" size={18} />
-              ) : (
-                <ArrowDownToLine size={18} />
-              )}{" "}
-              {pages.length > 1 ? "Tải PDF" : "Tải JPG"}
-            </button>
+            <div className="export-actions">
+              {(["pdf", "jpg"] as const).map((format) => (
+                <button
+                  key={format}
+                  className="primary"
+                  disabled={
+                    locked || !pages.length || completed !== pages.length
+                  }
+                  onClick={async () => {
+                    setExporting(format);
+                    try {
+                      await exportPages(pages, format);
+                    } catch (e) {
+                      setError((e as Error).message);
+                    } finally {
+                      setExporting(null);
+                    }
+                  }}
+                >
+                  {exporting === format ? (
+                    <LoaderCircle className="spin" size={18} />
+                  ) : (
+                    <ArrowDownToLine size={18} />
+                  )}{" "}
+                  Tải {format.toUpperCase()}
+                </button>
+              ))}
+            </div>
           </div>
         </section>
         <div className="how-to">

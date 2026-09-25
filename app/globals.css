@@ -424,6 +424,8 @@ h2 {
   margin: 0;
 }
 .export-bar {
+  flex-wrap: wrap;
+  gap: 14px;
   margin-top: 18px;
   display: flex;
   align-items: center;
@@ -434,6 +436,11 @@ h2 {
 }
 .export-bar strong {
   font-size: 12px;
+}
+.export-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 .export-bar p {
   font-size: 11px;

@@ -285,15 +285,13 @@ test("touch reorder inserts across pages; cancellation and keyboard preserve usa
   const page = await context.newPage();
   await page.goto("http://localhost:3000");
   const img = await fixture(page, true);
-  await page
-    .locator("input[type=file]")
-    .setInputFiles(
-      [1, 2, 3].map((n) => ({
-        name: `trang-${n}.png`,
-        mimeType: "image/png",
-        buffer: Buffer.from(img, "base64"),
-      })),
-    );
+  await page.locator("input[type=file]").setInputFiles(
+    [1, 2, 3].map((n) => ({
+      name: `trang-${n}.png`,
+      mimeType: "image/png",
+      buffer: Buffer.from(img, "base64"),
+    })),
+  );
   await expect(page.locator(".status.done")).toHaveCount(3);
   const titles = page.locator(".card-info h3");
   await page.locator(".page-drag-handle").first().scrollIntoViewIfNeeded();
@@ -344,3 +342,69 @@ test("touch reorder inserts across pages; cancellation and keyboard preserve usa
   await expect(page.locator(".is-dragging")).toHaveCount(0);
   await context.close();
 });
+
+for (const mode of ["quick", "normal"] as const) {
+  for (const count of [1, 2]) {
+    test(`${mode}: ${count} images can download both PDF and JPG`, async ({
+      page,
+    }, testInfo) => {
+      await page.goto("/");
+      await expect(
+        page.getByRole("button", { name: "Tải PDF" }),
+      ).toBeDisabled();
+      await expect(
+        page.getByRole("button", { name: "Tải JPG" }),
+      ).toBeDisabled();
+      if (mode === "normal")
+        await page.getByRole("button", { name: /Scan bình thường/ }).click();
+      const img = await fixture(page, true);
+      await page.locator("input[type=file]").setInputFiles(
+        Array.from({ length: count }, (_, i) => ({
+          name: `page-${i}.png`,
+          mimeType: "image/png",
+          buffer: Buffer.from(img, "base64"),
+        })),
+      );
+      if (mode === "normal") {
+        for (let i = 0; i < count; i++) {
+          await expect(page.locator(".status.done")).toHaveCount(i);
+          await page
+            .getByRole("button", { name: "Xác nhận", exact: true })
+            .click();
+        }
+      }
+      await expect(page.locator(".status.done")).toHaveCount(count);
+      const pdfPromise = page.waitForEvent("download");
+      await page.getByRole("button", { name: "Tải PDF" }).click();
+      const pdf = await pdfPromise;
+      expect(pdf.suggestedFilename()).toBe("tai-lieu.pdf");
+      const pdfPath = testInfo.outputPath("export.pdf");
+      await pdf.saveAs(pdfPath);
+      expect(readFileSync(pdfPath).toString("latin1")).toContain(
+        `/Count ${count}`,
+      );
+      const downloads: import("@playwright/test").Download[] = [];
+      page.on("download", (d) => downloads.push(d));
+      await page.getByRole("button", { name: "Tải JPG" }).click();
+      await expect.poll(() => downloads.length).toBe(count);
+      for (let i = 0; i < count; i++) {
+        expect(downloads[i].suggestedFilename()).toBe(
+          count === 1
+            ? "tai-lieu.jpg"
+            : `tai-lieu-${String(i + 1).padStart(2, "0")}.jpg`,
+        );
+        const jpgPath = testInfo.outputPath(`page-${i}.jpg`);
+        await downloads[i].saveAs(jpgPath);
+        expect([...readFileSync(jpgPath).subarray(0, 3)]).toEqual([
+          255, 216, 255,
+        ]);
+      }
+      await page.setViewportSize({ width: 390, height: 844 });
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= innerWidth,
+        ),
+      ).toBe(true);
+    });
+  }
+}

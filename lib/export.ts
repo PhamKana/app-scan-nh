@@ -8,11 +8,19 @@ function save(blob: Blob, name: string) {
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 30000);
 }
-export async function exportPages(pages: Page[]) {
+export async function exportPages(pages: Page[], format: "pdf" | "jpg") {
   if (!pages.length || pages.some((p) => p.status !== "done" || !p.result))
     throw Error("Hãy xử lý hoặc xóa các ảnh chưa hoàn tất trước khi tải.");
-  if (pages.length === 1) {
-    save(pages[0].result!, "tai-lieu.jpg");
+  if (format === "jpg") {
+    for (const [index, page] of pages.entries()) {
+      save(
+        page.result!,
+        pages.length === 1
+          ? "tai-lieu.jpg"
+          : `tai-lieu-${String(index + 1).padStart(2, "0")}.jpg`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
     return;
   }
   const { jsPDF } = await import("jspdf");
